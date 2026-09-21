@@ -5,6 +5,8 @@
 logs/
 
 # 项目方投递的原始数据（如 老年康养通用科普.zip：14 份 .docx，27MB 里 22MB 是 Word
-# 内嵌字体）。入库的是它切片后的产物 containerd/seed/kb_corpus/，原件留在本地当来路，
-# 不进 git —— 切片工具与原始文件的 sha256 都记在 .slice-manifest.json 里，可复核。
+# 内嵌字体）。**原件与它的切片产物都不入库** —— 内容属于伙伴方，而这两个仓库都是 PUBLIC；
+# 入库的是切片工具（containerd/tools/slice_kb_corpus.py + probes/kb_ingest.py + compose 里
+# 那条 bind-mount），任何机器上 `cd containerd && ./run.sh kbslice && ./run.sh kb` 重建。
+# 原始文件的 sha256 记在切片产物的 .slice-manifest.json 里，来路可复核。
 uploads/

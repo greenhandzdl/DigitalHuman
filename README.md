@@ -43,6 +43,8 @@ cd containerd
 ./run.sh test fay-probe   # 只跑其中一组
 ./run.sh audit     # 核账：三个上游仓库是否仍零改动、与上游不分叉（非零退出可当断言）
 ./run.sh upstream  # 跟上游对表：报 fork 落后 xszyou/Fay 几条 + 补丁可否照贴
+./run.sh kbslice   # 把 uploads/ 里项目方给的 .docx 切成 seed/kb_corpus/ 的语料（换语料才跑）
+./run.sh kb        # 该语料入库 + 12 问真实问法抽测检索
 ./run.sh logs fay  # 看某个服务日志
 ```
 
