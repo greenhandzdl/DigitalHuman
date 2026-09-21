@@ -37,3 +37,14 @@ service/.venv
 
 logs
 .gitignore
+
+# --- frontend/（伙伴方仓库的 submodule）---
+# 他们的工程只在镜像里构建（images/frontend.Dockerfile 两阶段：node 装依赖 + vite build，
+# 产物再拷进 python-slim）。宿主上 npm install / npm run build 出来的东西一个都不进构建
+# 上下文：node_modules 是几百 MB 且平台相关（锁文件里 musl 与 glibc 两套 rollup 都留着），
+# dist-h5 是产物 —— 带进来只会让每个用根目录当上下文的构建都白传一遍。
+**/node_modules
+frontend/**/dist-h5
+# 同 service/.env 那条理由：本地实值密钥不进任何构建上下文（他们的 .env.development 里
+# 放的是魔珐 APP_SECRET）
+frontend/**/.env*

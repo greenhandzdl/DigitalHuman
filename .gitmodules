@@ -10,3 +10,6 @@
 [submodule "fay"]
 	path = fay
 	url = https://github.com/chuan918/Fay.git
+[submodule "frontend"]
+	path = frontend
+	url = https://gitee.com/xie-zha-zha/carecho_final

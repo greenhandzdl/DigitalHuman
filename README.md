@@ -1,87 +1,197 @@
-# DigitalHuman · 康养数字人
+# DigitalHuman · 康养数字人（CareEcho）
 
-三个上游仓库 + 一套 Docker 集成。所有可运行的服务都封装进 `containerd/`，
-由宿主上的 Ollama 提供 LLM/嵌入；上游仓库工作树始终零改动（补丁/覆盖都落在 `containerd/`）。
+一套可复现的**康养数字人栈**：Fay 数字人框架 + FastAPI 业务后端 + 中文语音识别 +
+chromadb 知识库 + CareEcho H5 前端，用一份 `docker compose` 起全栈，
+LLM 与向量嵌入由宿主上的 Ollama 提供。
 
-> 权威细节、实测数字、每个坑的分析都在 **[`containerd/README.md`](containerd/README.md)**。
-> 本文只讲仓库构成与怎么起。
+设计上的两条硬规矩，读代码前先知道：
+
+1. **上游仓库工作树始终零改动。** 所有适配都以 `containerd/patches/*.patch` 在构建期打上、
+   或以 `containerd/overlay/` 的文件在运行期挂载覆盖。改别人代码的代价是每次上游更新都要重做一遍，
+   所以那代价被集中收进一个可复核的目录里（`./run.sh audit` 就是用来核对这条规矩的）。
+2. **能力必须被测试件证明，否则不算存在。** 每个服务配一组探针（`containerd/probes/`），
+   判据要么通过、要么明确记成 SKIP/降级并写出原因；每条判据还配一个「故意改坏它必须变红」的负面自检。
+
+> 权威细节、每个坑的分析和实测数字都在 **[`containerd/README.md`](containerd/README.md)**。
+> 本文只讲这套东西由什么组成、怎么起来、以及边界在哪。
 
 ## 仓库构成
 
-| 目录 | 是什么 | 容器化 |
-|---|---|---|
-| `fay/` | Fay 数字人框架，fork [`chuan918/Fay`](https://github.com/chuan918/Fay)（上游 v4.8.1 的直接后代） | ✅ `dh-fay` |
-| `service/` | 康养后端（FastAPI + MySQL + Redis，含 pytest 套件） | ✅ `dh-backend` + `dh-adapter` |
-| `ue/` | Unreal Engine 5.1 数字人模型工程（前端） | ❌ 见下方边界 |
-| `containerd/` | 全部 Docker 封装、补丁、覆盖、探针、测试 | —— 唯一入口 |
+| 目录 | 是什么 | 上游 | 容器化 |
+|---|---|---|---|
+| `fay/` | Fay 数字人框架（LLM 编排、MCP、数字人 WS 协议） | fork [`chuan918/Fay`](https://github.com/chuan918/Fay)，`upstream` = [`xszyou/Fay`](https://github.com/xszyou/Fay) | ✅ `dh-fay` |
+| `service/` | 康养业务后端（FastAPI + MySQL + Redis，自带 pytest） | 自有 | ✅ `dh-backend` + `dh-adapter` |
+| `frontend/` | CareEcho H5（Vue 3 + Vite）与微信小程序壳 | gitee [`xie-zha-zha/carecho_final`](https://gitee.com/xie-zha-zha/carecho_final) | ✅ `dh-frontend`（只发 H5） |
+| `ue/` | Unreal Engine 5.1 数字人模型工程 | 自有 | ❌ 见「不进容器的东西」 |
+| `containerd/` | 全部 Docker 封装：镜像、补丁、覆盖、探针、测试、入口脚本 | —— | 唯一入口 |
 
-`fay/ service/ ue/ containerd/` 以 **git submodule** 记录各自上游的精确 commit 作为溯源。
-
-Fay 的**上游不是一份并排的拷贝，而是 `fay/` 仓库里的一个 remote**：
-`origin` = fork `chuan918/Fay`（子模块记录的地址），`upstream` = `xszyou/Fay`。
-`main` 只 track `origin/main`，跟上游走靠合并 —— `cd containerd && ./run.sh upstream`
-会 fetch 一次、报落后几条，并把每份 fay 补丁对 `upstream/main` 干跑预检（贴不上就非零退出）。
-曾经有一份 `origin_fay/` 上游参照实例（第二个镜像、第二个端口段、第九组测试件）。
-fork 已经是上游的直接后代 —— 当前只落后一个只动 `requirements.txt` 的提交，且那个改动
-我们自己那份 overlay 早就带着 —— 并排跑第二份的意义没了，2026-09-21 撤掉。
+`fay/ service/ ue/ frontend/ containerd/` 以 **git submodule** 记录各自上游的精确 commit 作为溯源。
 
 ```bash
 git clone --recursive https://github.com/greenhandzdl/DigitalHuman.git
 # 已 clone 过则：git submodule update --init --recursive
-# submodule 的远端换了地址（fay → chuan918/Fay）时：
+# 某个 submodule 的远端地址换过时（fay 换过）：
 git submodule sync -- fay && git submodule update --init --recursive
 ```
+
+Fay 的上游**不是**一份并排的拷贝，而是 `fay/` 仓库里的一个 remote：`origin` 指 fork，
+`upstream` 指 `xszyou/Fay`。跟上游走靠合并 —— `cd containerd && ./run.sh upstream` 会 fetch 一次、
+报落后几条，并把每份 fay 补丁对 `upstream/main` 干跑预检（贴不上就非零退出，等于把「补丁会不会被上游漂移
+废掉」变成一条能进 CI 的断言）。
+
+## 架构
+
+```mermaid
+flowchart LR
+  subgraph CLIENT["外部客户端（都在栈外）"]
+    H5["手机或桌面浏览器<br/>CareEcho H5"]
+    UE["Unreal Engine 5.1 数字人<br/>通常跑在另一台 Windows 机器"]
+    XC["魔珐 Xmov 云<br/>TTS 与形象驱动"]
+  end
+
+  subgraph STACK["containerd/ · 一份 docker compose"]
+    WEB["dh-frontend :5173<br/>静态产物 + 同源外壳<br/>HTTP 转发 + WebSocket 转发"]
+    BE["dh-backend :8000<br/>FastAPI · 会话 / 用户 / 落库"]
+    AD["dh-adapter :8010<br/>/api/chat ↔ Fay 协议适配"]
+    FAY["dh-fay :5000 :10002 :10003<br/>数字人框架 + MCP 服务器"]
+    ASR["dh-funasr :10095<br/>Paraformer 中文识别 · CPU"]
+    RAG["dh-yueshen-rag<br/>chromadb 知识库"]
+    DB[("dh-mysql :13306<br/>care_echo_rehab")]
+    RD[("dh-redis :16379")]
+  end
+
+  subgraph HOST["宿主 · 不在本 compose 内"]
+    OLLAMA["Ollama :11434<br/>对话模型 + 嵌入模型"]
+  end
+
+  H5 -->|"/api/chat/send（同源 HTTP）"| WEB
+  H5 -->|"/funasr-ws（麦克风 WS）"| WEB
+  H5 -->|"Xmov SDK：TTS 与口型"| XC
+  WEB -->|"dev-login → 建会话 → 发消息"| BE
+  BE --> AD
+  AD -->|"/api/send + get-msg"| FAY
+  WEB -->|"按常量表转发"| ASR
+  FAY -->|"对话与嵌入 HTTP"| OLLAMA
+  RAG -->|"嵌入 HTTP"| OLLAMA
+  FAY -->|"MCP stdio / SSE"| RAG
+  FAY -->|"音频文件 URL 给 UE 取"| UE
+  UE -->|"拨入 :10002 数字人 WS"| FAY
+  BE --> DB
+  BE --> RD
+  FAY --> RD
+```
+
+三个容易看错的地方：
+
+- **UE 只拨进来，Fay 从不外拨。** 数字人那条 WS 的方向是 UE → `:10002`；
+  但 Fay 回给 UE 的**音频下载地址**是拼在文本里的一个 URL，取自 `fay_url` ——
+  那是跨机部署唯一真正会咬人的地方，见「档位与跨机流量」。
+- **H5 只与自己的同源地址说话。** 页面既不指后端也不指 Fay，全部经 `:5173` 那个外壳转发；
+  麦克风那条 `ws` 也一样（生产构建里没有 Vite 的 dev proxy，所以这层转发必须由外壳提供）。
+- **Xmov 那一跳发生在浏览器里**，不经过本栈任何容器。它的密钥是构建期内联进产物的，
+  默认留空（见「不进容器的东西」一节）。
+
+## 服务与端口
+
+端口策略只有一个开关：`.env` 里的 `DH_ENV`（`prod` 缺省 / `dev`）。
+
+| 服务 | 容器内 | prod（`./run.sh up`） | dev 追加（`./run.sh dev`） |
+|---|---|---|---|
+| `dh-frontend` | 8080 | `127.0.0.1:5173` | 绑到探测出的局域网 IP |
+| `dh-backend` | 8000 | `127.0.0.1:8000` | 同上 |
+| `dh-adapter` | 8010 | `127.0.0.1:8010` | 同上 |
+| `dh-fay` | 5000 / 10002 / 10003 | 三个都 `127.0.0.1` | 同上，另加 5010 / 8765 / 10001 / 音频桥 10199 |
+| `dh-yueshen-rag` | 8766 | **不发布**（只走 compose 内网） | `:8766` |
+| `dh-funasr` | 10095 | **不发布**（只经 5173 同源转发） | `:10095` |
+| `dh-mysql` | 3306 | `127.0.0.1:13306` | **恒 `127.0.0.1`，不跟档位放开** |
+| `dh-redis` | 6379 | `127.0.0.1:16379` | **恒 `127.0.0.1`，不跟档位放开** |
+
+两条边界是刻意的，不是没来得及做：
+
+- `prod` 下把 `BIND_ADDR` 改成 `0.0.0.0` 或某个局域网地址，`./run.sh up` **直接报错退出**。
+  理由是 `:5000` 一离开 loopback 就同时暴露 Fay 的管理台和它的无鉴权 OpenAI 兼容 façade。
+- `mysql` / `redis` 即使在 `dev` 也写死 `127.0.0.1`。它们没有任何外部消费者，
+  而「只靠一个口令的数据库进局域网」正是这类栈最常见的泄漏面。
 
 ## 快速开始
 
 ```bash
 cd containerd
-./run.sh up        # 构建 + 起栈（首次约 3~6 分钟，pip 走阿里云镜像）
-./run.sh smoke     # 端到端：后端 → adapter → Fay → Ollama → 落库
-./run.sh test      # 八组测试件（backend-test · backend-probe · adapter-test · probe-selftest
-                   #            · probe-fay-lite · ue-audit · fay-probe · probe-yueshen）
-./run.sh test fay-probe   # 只跑其中一组
-./run.sh audit     # 核账：三个上游仓库是否仍零改动、与上游不分叉（非零退出可当断言）
-./run.sh upstream  # 跟上游对表：报 fork 落后 xszyou/Fay 几条 + 补丁可否照贴
-./run.sh kbslice   # 把 uploads/ 里项目方给的 .docx 切成 seed/kb_corpus/ 的语料（换语料才跑）
-./run.sh kb        # 该语料入库 + 12 问真实问法抽测检索
-./run.sh logs fay  # 看某个服务日志
+cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成随机 DB 口令与 JWT 密钥
+
+./run.sh up                 # 构建 + 起全栈（首次约 3~6 分钟；dh-funasr 那 1.57 GiB 镜像与模型缓存另算，见下）
+./run.sh smoke              # 端到端冒烟：后端 → adapter → Fay → Ollama → 回库
+./run.sh test               # 全套测试件（13 组，见 containerd/README.md）
+./run.sh test asr-test      # 只跑其中一组
+./run.sh dev                # dev 档位：应用面端口放开，给手机 / 另一台机器连
+./run.sh audit              # 核账：四个上游仓库是否仍零改动，并列出 containerd 侧产物
+./run.sh upstream           # 与 Fay 上游对表：落后几条 + 补丁能否照贴
+./run.sh kbslice            # 把项目方语料包切成知识库语料（换语料才跑）
+./run.sh kb                 # 语料入库 + 用真实问法抽测检索
+./run.sh asr-seed           # 本机若已有别的 FunASR 缓存，拷过来省 1.3GB 下载
+./run.sh logs funasr        # 看某个服务的日志（fay/backend/adapter/frontend/funasr/mysql/redis）
 ```
 
-`run.sh` 首次执行会调用 `containerd/tools/gen_keys.py` 把 `.env.example` 复制成 `.env` 并填入随机密钥（DB 口令与 JWT 签名密钥）。
+`dh-funasr` 首次启动会从 ModelScope 下载约 **1.3GB** 的三个模型
+（paraformer-large + fsmn-vad + ct-punc），缓存落在命名卷 `funasr-cache`；
+健康检查为此给了 300s 的 `start_period`，所以「前端起来了但麦克风还打不开」在首次是正常中间态。
 
-## 服务与端口
+## 档位与跨机流量
 
-全部发布端口**只绑 `127.0.0.1`**（外部不可达）；下表是宿主侧端口。
+`./run.sh dev` 与 `./run.sh up` 起的是**同一套服务**，差别只在多叠一个
+`docker-compose.dev.yml`（放开应用面端口、给后端 `DEBUG=true`、把 `FAY_URL` 指向本机局域网地址）。
+`DH_ENV` 不出现在业务代码里，它只决定 compose 文件列表和 `BIND_ADDR` 的落点。
 
-| 服务 | 宿主端口 | 说明 |
-|---|---|---|
-| `dh-backend` | `:8000` | FastAPI；OpenAPI `/docs`，健康 `/api/v1/health` |
-| `dh-adapter` | `:8010` | 后端 `/api/chat` ↔ Fay `/api/send`+`get-msg` 的适配层 |
-| `dh-fay` | `:5000` `:10002` `:10003` | Fay HTTP + 两条 WS（另有 test profile 下的 `dh-fay-lite`，同镜像换 1.5b 小模型，不发布宿主端口）|
-| `dh-mysql` | `:13306` | 业务库 `care_echo_rehab`（另有 pytest 独立库） |
-| `dh-redis` | `:16379` | 缓存 |
+让跑在另一台电脑上的 UE 连进来需要三件事，脚本末尾会把它们直接打出来：
 
-`dh-yueshen-rag`（chromadb 知识库）与 Fay 的 `:5010`/`:8765` MCP 口只在 compose 内网，不发布到宿主。
-LLM 与嵌入走宿主 Ollama（`http://host.docker.internal:11434`），不在本 compose 内。
+1. 端口进得来 → `dev` 档位绑探测到的局域网 IP（不是 `0.0.0.0`）。
+2. UE 拿到的音频地址可达 → `containerd/patches/fay/0007-fay-url-env-overridable-CRLF-source.patch`
+   让 `fay_url` 能被环境变量 `FAY_URL` 覆盖；不设时完全等于上游原行为。
+3. 一个稳定名字 → 栈内容器要用 `ws://dh-host:10002` 这类写法时，`docker-compose.yml` 的
+   `extra_hosts` 在**容器内**提供 `dh-host` / `ue-host` 两条映射；宿主机侧要 UE 也认这个名字，
+   才在 Windows 的 `C:\Windows\System32\drivers\etc\hosts` 加一行 `<本机 LAN IP>  dh-host`。
+   嫌麻烦就直接填 IP，效果一样。
 
-```
-   UE5 模型(桌面/Windows) --WS 10002--> Fay <--HTTP-- adapter <-- /api/chat -- backend --> MySQL/Redis
-                                            └-- MCP :8765/:5010 --(tools / 知识库 / yueshen-rag)
-```
+`getUserMedia`（麦克风）只在 **https 或 localhost** 算安全上下文。所以从手机用
+`http://<局域网 IP>:5173` 打开页面时，聊天照常，但麦克风按钮一定失败 —— 这不是本栈的缺陷，
+是浏览器的规则；要真机测语音得走 https 或用 USB 调试的 localhost 转发。
 
-## `ue` 的边界（为什么不进容器）
+## 不进容器的东西
 
-`ue/` 是 **UE5.1 的蓝图内容工程**（`shuziren.uproject`），实测：不含引擎本体、
-`PlatformAllowList` 多为 `Win64`、全树 0 个预编译二进制、5 个插件要 Epic Marketplace 授权，
-且**端点级引用 Fay 的 10002 协议为 0 处** —— 这个工程从未实现过与 Fay 的对接。
+- **`ue/`**：UE5.1 的蓝图内容工程（`shuziren.uproject`）。实测不含引擎本体、
+  `PlatformAllowList` 多为 `Win64`、全树 0 个预编译二进制、5 个插件要 Epic Marketplace 授权，
+  且端点级引用 Fay `10002` 协议为 0 处 —— 这个工程从未实现过与 Fay 的对接。
+  Linux 无头容器与它不兼容，因此改为在 `containerd` 里用一个只读的 `ue-audit` 容器做
+  **构建完整性体检**（描述符可解析 + 每个插件模块的 `Source/` 目录都在），
+  把「为什么不能容器化」变成可复核的数字而不是一句断言。
+- **微信小程序壳 `frontend/careecho-h5-wc`**：它要求 H5 部署在**已备案的 https 域名**上，
+  那是发布资质问题而不是集成问题，本栈不代发。
+- **Xmov 的密钥**：`VITE_XMOV_APP_ID` / `VITE_XMOV_APP_SECRET` 是构建期内联进产物的
+  （伙伴方代码读 `import.meta.env`，运行期换 env 不生效）。默认留空 → 产物走它自己的
+  「缺少 Xmov APP_ID」分支，数字人区域显示占位提示、聊天与语音识别照常。
+  要填就自己在 `docker build --build-arg` 上给，但注意 ARG 值会留在镜像 history 里。
+- **宿主 Ollama**：LLM 与向量嵌入的默认落点（`http://host.docker.internal:11434`）。
+  本栈有两处**没有**走它，都是明写的例外：
+  - 语音识别 —— Ollama 的 `/api/chat` 只收 `text` + `images`，**没有音频输入口**，
+    模型清单里也没有 paraformer，所以 `dh-funasr` 自建镜像自己推理。
+  - TTS 与形象驱动 —— 那是浏览器里的 Xmov 云 SDK，从架构上就不在这台机器上。
 
-在 Linux 无头容器里跑起来需要 Windows + UE5.1 + 授权插件，与本机环境不兼容。因此 `ue/`
-不进 compose，改由 `containerd` 里一个只读的 `ue-audit` 容器做**构建完整性体检**
-（描述符可解析 + 每个插件模块的 `Source/` 目录都在），把"为什么不能容器化"变成可复核的数字。
+## 安全
 
-## 密钥与安全
+- `containerd/.env` 是本地实值密钥（DB 口令、JWT 签名密钥），已被 `.gitignore` 忽略，不入库。
+  首次运行 `run.sh` 会由 `tools/gen_keys.py` 从 `.env.example` 生成随机值。
+- 两个公开仓库（`DigitalHuman` 与 `DigitalHuman-containerd`）都不含项目方语料、
+  伙伴方数据或任何密钥；`seed/kb_corpus/` 一类的切片产物只在本地。
+- `prod` 的 `BIND_ADDR` 硬闸、`mysql`/`redis` 恒 loopback、FunASR 与 yueshen 不发布宿主端口，
+  是同一件事的三个面：**对外只留必要口，放开必须是显式决定**。
+- 外壳的 WebSocket 转发是**常量表**（`CARECHO_WS_RELAY="路径=上游"`，精确匹配、丢 query），
+  客户端给的 path 永远不进 `getaddrinfo`，所以它不是开放代理，也就不能被当开放代理用。
 
-- `containerd/.env` 是本地实值密钥（DB 口令、JWT 签名密钥），已被 `containerd/.gitignore` 忽略，不入库。
-- 本文档不再明文打印任何口令。
-- ⚠️ 主机遗留项：`~/.gitconfig` 里有一条全局改写 `url."https://<用户>:gho_…@github.com/".insteadOf = "https://github.com/"`，把 `gh auth` 的 OAuth token 以明文写死，并让**所有** GitHub remote 在 `git remote -v` 里显示成带 token 的形式（fay/service/ue 各自 `.git/config`、以及 `fay` 里 `upstream` 这个 remote 存的其实都是干净 URL）。建议删掉这条 insteadOf，改用已装好的 `gh auth git-credential` helper；主机若共享还应**轮换该 token**。此为宿主机全局 git 配置，未代为修改。
+## 许可与致谢
+
+上游代码各自遵循其仓库的许可（Fay、CareEcho H5、`service/`），本仓库不替它们重新声明。
+`containerd/` 这层封装**目前没有附独立许可证文件** —— 需要的话请先明确它再分发，
+不要因为「看起来像示例」就当它是公共领域。
+
+需要特别对待的是别人的东西：伙伴方的 H5 与项目方语料不进本仓库，
+`seed/kb_corpus/`、`.env`、模型缓存也都不该进 —— 这一点由 `./run.sh audit` 与提交前的自查把着。
