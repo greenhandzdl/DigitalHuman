@@ -16,6 +16,13 @@
 | `ue/` | Unreal Engine 5.1 数字人模型工程（前端） | ❌ 见下方边界 |
 | `containerd/` | 全部 Docker 封装、补丁、覆盖、探针、测试 | —— 唯一入口 |
 
+`fay/ service/ ue/ containerd/` 以 **git submodule** 记录各自上游的精确 commit 作为溯源；`origin_fay/` 只作本地对照、不纳入本仓库。
+
+```bash
+git clone --recursive https://github.com/greenhandzdl/DigitalHuman.git
+# 已 clone 过则：git submodule update --init --recursive
+```
+
 ## 快速开始
 
 ```bash
@@ -29,7 +36,7 @@ cd containerd
 ./run.sh logs fay  # 看某个服务日志
 ```
 
-`run.sh` 首次执行会把 `.env.example` 复制成 `.env` 并填入随机密钥。
+`run.sh` 首次执行会调用 `containerd/tools/gen_keys.py` 把 `.env.example` 复制成 `.env` 并填入随机密钥（DB 口令与 JWT 签名密钥）。
 
 ## 服务与端口
 
