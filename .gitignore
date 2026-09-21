@@ -1,9 +1,10 @@
 # 根仓库是「伞形」仓库：产品各部分以 submodule 记录精确 commit，
 # 构建上下文与项目文档直接入库。
 
-# origin_fay 不是第 5 个仓库，而是 fay 里 upstream remote(xszyou/Fay) 的 git
-# worktree，由 containerd/run.sh 自动 materialize，故不纳入本仓库。
-origin_fay/
-
 # 运行/构建产物
 logs/
+
+# 项目方投递的原始数据（如 老年康养通用科普.zip：14 份 .docx，27MB 里 22MB 是 Word
+# 内嵌字体）。入库的是它切片后的产物 containerd/seed/kb_corpus/，原件留在本地当来路，
+# 不进 git —— 切片工具与原始文件的 sha256 都记在 .slice-manifest.json 里，可复核。
+uploads/

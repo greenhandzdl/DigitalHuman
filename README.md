@@ -1,6 +1,6 @@
 # DigitalHuman · 康养数字人
 
-四个上游仓库 + 一套 Docker 集成。所有可运行的服务都封装进 `containerd/`，
+三个上游仓库 + 一套 Docker 集成。所有可运行的服务都封装进 `containerd/`，
 由宿主上的 Ollama 提供 LLM/嵌入；上游仓库工作树始终零改动（补丁/覆盖都落在 `containerd/`）。
 
 > 权威细节、实测数字、每个坑的分析都在 **[`containerd/README.md`](containerd/README.md)**。
@@ -11,14 +11,19 @@
 | 目录 | 是什么 | 容器化 |
 |---|---|---|
 | `fay/` | Fay 数字人框架，fork [`chuan918/Fay`](https://github.com/chuan918/Fay)（上游 v4.8.1 的直接后代） | ✅ `dh-fay` |
-| `origin_fay/` | 上游 [`xszyou/Fay`](https://github.com/xszyou/Fay) v4.8.1 参照实例 —— **不是第 5 个仓库**，是 `fay/` 里 `upstream` remote 的 git worktree | ✅ `dh-origin-fay` |
 | `service/` | 康养后端（FastAPI + MySQL + Redis，含 pytest 套件） | ✅ `dh-backend` + `dh-adapter` |
 | `ue/` | Unreal Engine 5.1 数字人模型工程（前端） | ❌ 见下方边界 |
 | `containerd/` | 全部 Docker 封装、补丁、覆盖、探针、测试 | —— 唯一入口 |
 
 `fay/ service/ ue/ containerd/` 以 **git submodule** 记录各自上游的精确 commit 作为溯源。
-`origin_fay/` 不纳入本仓库：它是 `fay/` 派生出来的 worktree，`run.sh up|build|test` 发现它
-缺失时会自己 `git -C ../fay worktree add ../origin_fay -b upstream-main upstream/main` 补出来。
+
+Fay 的**上游不是一份并排的拷贝，而是 `fay/` 仓库里的一个 remote**：
+`origin` = fork `chuan918/Fay`（子模块记录的地址），`upstream` = `xszyou/Fay`。
+`main` 只 track `origin/main`，跟上游走靠合并 —— `cd containerd && ./run.sh upstream`
+会 fetch 一次、报落后几条，并把每份 fay 补丁对 `upstream/main` 干跑预检（贴不上就非零退出）。
+曾经有一份 `origin_fay/` 上游参照实例（第二个镜像、第二个端口段、第九组测试件）。
+fork 已经是上游的直接后代 —— 当前只落后一个只动 `requirements.txt` 的提交，且那个改动
+我们自己那份 overlay 早就带着 —— 并排跑第二份的意义没了，2026-09-21 撤掉。
 
 ```bash
 git clone --recursive https://github.com/greenhandzdl/DigitalHuman.git
@@ -33,10 +38,11 @@ git submodule sync -- fay && git submodule update --init --recursive
 cd containerd
 ./run.sh up        # 构建 + 起栈（首次约 3~6 分钟，pip 走阿里云镜像）
 ./run.sh smoke     # 端到端：后端 → adapter → Fay → Ollama → 落库
-./run.sh test      # 九组测试件（backend-test · backend-probe · adapter-test · probe-selftest
-                   #            · probe-fay-lite · ue-audit · fay-probe · probe-origin-fay · probe-yueshen）
+./run.sh test      # 八组测试件（backend-test · backend-probe · adapter-test · probe-selftest
+                   #            · probe-fay-lite · ue-audit · fay-probe · probe-yueshen）
 ./run.sh test fay-probe   # 只跑其中一组
-./run.sh audit     # 核账：四个上游仓库是否仍零改动、与上游不分叉（非零退出可当断言）
+./run.sh audit     # 核账：三个上游仓库是否仍零改动、与上游不分叉（非零退出可当断言）
+./run.sh upstream  # 跟上游对表：报 fork 落后 xszyou/Fay 几条 + 补丁可否照贴
 ./run.sh logs fay  # 看某个服务日志
 ```
 
@@ -50,8 +56,7 @@ cd containerd
 |---|---|---|
 | `dh-backend` | `:8000` | FastAPI；OpenAPI `/docs`，健康 `/api/v1/health` |
 | `dh-adapter` | `:8010` | 后端 `/api/chat` ↔ Fay `/api/send`+`get-msg` 的适配层 |
-| `dh-fay` | `:5000` `:10002` `:10003` | Fay（fork）HTTP + 两条 WS |
-| `dh-origin-fay` | `:5100` `:10012` `:10013` | 上游那份，错开端口并存 |
+| `dh-fay` | `:5000` `:10002` `:10003` | Fay HTTP + 两条 WS（另有 test profile 下的 `dh-fay-lite`，同镜像换 1.5b 小模型，不发布宿主端口）|
 | `dh-mysql` | `:13306` | 业务库 `care_echo_rehab`（另有 pytest 独立库） |
 | `dh-redis` | `:16379` | 缓存 |
 

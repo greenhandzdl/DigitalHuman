@@ -1,11 +1,10 @@
 # 构建上下文 = 项目根目录。三个应用镜像分别取 containerd 之外的源码：
-#   fay.Dockerfile  → COPY ${FAY_SRC}/   （fay 或 origin_fay）
+#   fay.Dockerfile  → COPY fay/
 #   service.Dockerfile → COPY service/
 # ue/ 是 10.06 GiB 的 UE 5.1 工程：引擎本体不在仓库、5 个插件要 Marketplace 授权、
 # AppleARKitFaceSupport 连 Linux target 都没有，且全树零处引用 Fay 的数字人协议。
 # 判据由 containerd/probes/ue_audit.py 扫出来，见 containerd/README.md「UE 仓库的容器侧处置」。
 ue
-containerd/_backup
 # ue-audit 的报告输出目录，是产物不是源码
 containerd/_audit
 **/.git
@@ -16,7 +15,7 @@ containerd/_audit
 **/.env
 **/test.txt
 
-# --- fay / origin_fay 两份代码同样的运行期目录 ---
+# --- fay 的运行期目录：镜像里由 volume 提供，不该被拷进构建上下文 ---
 # 知识库语料 fay_player_knowledge 保留（只有十几 MB，MCP「课程知识库」要靠它出内容）。
 # test/ 曾经整个排掉，结果每次启动都记一条「tools 连接失败」：镜像里自带的
 # faymcp/data/mcp_servers.json 默认自启动一个 stdio 示例服务器，命令写的就是
@@ -30,13 +29,6 @@ fay/memory
 fay/readme
 fay/test/ovr_lipsync
 fay/新知识库
-origin_fay/cache_data
-origin_fay/logs
-origin_fay/samples
-origin_fay/memory
-origin_fay/readme
-origin_fay/test/ovr_lipsync
-origin_fay/packaging
 
 # --- service ---
 service/.venv
