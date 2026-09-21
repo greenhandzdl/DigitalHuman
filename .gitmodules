@@ -1,0 +1,12 @@
+[submodule "containerd"]
+	path = containerd
+	url = https://github.com/greenhandzdl/DigitalHuman-containerd.git
+[submodule "service"]
+	path = service
+	url = https://github.com/J1s2-ovo/Backend_KangYang.git
+[submodule "ue"]
+	path = ue
+	url = https://github.com/starwishXxX/FrontendKangYang
+[submodule "fay"]
+	path = fay
+	url = https://github.com/chuan114514/-Helpful-Listener-Fay-AI-

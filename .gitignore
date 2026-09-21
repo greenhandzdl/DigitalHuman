@@ -1,15 +1,8 @@
-# 根仓库是「伞形」索引仓库：只承载项目级文档与构建上下文，不含各子仓库源码。
-# 下面的目录各自是独立的 git 仓库（有各自的 upstream / remote），不纳入本仓库。
+# 根仓库是「伞形」仓库：产品各部分以 submodule 记录精确 commit，
+# 构建上下文与项目文档直接入库。
 
-# 四个上游代码仓库（始终保持与 upstream 零分叉，不改动其代码）
-fay/
+# origin_fay 仅作为 Fay 上游对照，不纳入本仓库（保持独立 checkout）。
 origin_fay/
-service/
-ue/
-
-# 容器集成目录：独立仓库与 remote
-# github.com/greenhandzdl/DigitalHuman-containerd
-containerd/
 
 # 运行/构建产物
 logs/
