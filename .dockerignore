@@ -1,0 +1,47 @@
+# 构建上下文 = 项目根目录。三个应用镜像分别取 containerd 之外的源码：
+#   fay.Dockerfile  → COPY ${FAY_SRC}/   （fay 或 origin_fay）
+#   service.Dockerfile → COPY service/
+# ue/ 是 10.06 GiB 的 UE 5.1 工程：引擎本体不在仓库、5 个插件要 Marketplace 授权、
+# AppleARKitFaceSupport 连 Linux target 都没有，且全树零处引用 Fay 的数字人协议。
+# 判据由 containerd/probes/ue_audit.py 扫出来，见 containerd/README.md「UE 仓库的容器侧处置」。
+ue
+containerd/_backup
+# ue-audit 的报告输出目录，是产物不是源码
+containerd/_audit
+**/.git
+**/.venv
+**/__pycache__
+**/*.pyc
+# 任何本地实值配置都不能进镜像（service/.env 里有真实 DB 密码与 JWT 密钥）
+**/.env
+**/test.txt
+
+# --- fay / origin_fay 两份代码同样的运行期目录 ---
+# 知识库语料 fay_player_knowledge 保留（只有十几 MB，MCP「课程知识库」要靠它出内容）。
+# test/ 曾经整个排掉，结果每次启动都记一条「tools 连接失败」：镜像里自带的
+# faymcp/data/mcp_servers.json 默认自启动一个 stdio 示例服务器，命令写的就是
+# `python test/mcp_stdio_example.py`。整个目录里真正大的只有 ovr_lipsync（289MB，
+# MetaHuman 口型插件的 Windows 源码），其余 .py + notebook 合起来约 300KB，
+# 所以只排 ovr_lipsync，让 stdio 传输这条路在容器里是真能跑通的。
+fay/cache_data
+fay/logs
+fay/samples
+fay/memory
+fay/readme
+fay/test/ovr_lipsync
+fay/新知识库
+origin_fay/cache_data
+origin_fay/logs
+origin_fay/samples
+origin_fay/memory
+origin_fay/readme
+origin_fay/test/ovr_lipsync
+origin_fay/packaging
+
+# --- service ---
+service/.venv
+# service/tests 反过来要进镜像（只有 52K）：backend-test 在镜像里跑 pytest，
+# containerd/patches/service/*.patch 也是打在镜像的 tests 上，宿主挂载会盖掉补丁。
+
+logs
+.gitignore
