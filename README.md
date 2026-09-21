@@ -66,4 +66,4 @@ LLM 与嵌入走宿主 Ollama（`http://host.docker.internal:11434`），不在�
 
 - `containerd/.env` 是本地实值密钥（DB 口令、JWT 签名密钥），已被 `containerd/.gitignore` 忽略，不入库。
 - 本文档不再明文打印任何口令。
-- ⚠️ 遗留项：`ue/.git/config` 的 `origin` URL 内嵌了 GitHub PAT 明文，建议**轮换该 token 并改用 credential helper**（属上游仓库配置，未代为修改）。
+- ⚠️ 主机遗留项：`~/.gitconfig` 里有一条全局改写 `url."https://<用户>:gho_…@github.com/".insteadOf = "https://github.com/"`，把 `gh auth` 的 OAuth token 以明文写死，并让**所有** GitHub remote 在 `git remote -v` 里显示成带 token 的形式（fay/origin_fay/service/ue 各自 `.git/config` 里存的其实是干净的 URL）。建议删掉这条 insteadOf，改用已装好的 `gh auth git-credential` helper；主机若共享还应**轮换该 token**。此为宿主机全局 git 配置，未代为修改。
