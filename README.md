@@ -10,17 +10,21 @@
 
 | 目录 | 是什么 | 容器化 |
 |---|---|---|
-| `fay/` | Fay 数字人框架（fork，Python/Flask + WebSocket） | ✅ `dh-fay` |
-| `origin_fay/` | Fay 上游对照（同镜像、同端口，换模型来源验证） | ✅ `dh-origin-fay` |
+| `fay/` | Fay 数字人框架，fork [`chuan918/Fay`](https://github.com/chuan918/Fay)（上游 v4.8.1 的直接后代） | ✅ `dh-fay` |
+| `origin_fay/` | 上游 [`xszyou/Fay`](https://github.com/xszyou/Fay) v4.8.1 参照实例 —— **不是第 5 个仓库**，是 `fay/` 里 `upstream` remote 的 git worktree | ✅ `dh-origin-fay` |
 | `service/` | 康养后端（FastAPI + MySQL + Redis，含 pytest 套件） | ✅ `dh-backend` + `dh-adapter` |
 | `ue/` | Unreal Engine 5.1 数字人模型工程（前端） | ❌ 见下方边界 |
 | `containerd/` | 全部 Docker 封装、补丁、覆盖、探针、测试 | —— 唯一入口 |
 
-`fay/ service/ ue/ containerd/` 以 **git submodule** 记录各自上游的精确 commit 作为溯源；`origin_fay/` 只作本地对照、不纳入本仓库。
+`fay/ service/ ue/ containerd/` 以 **git submodule** 记录各自上游的精确 commit 作为溯源。
+`origin_fay/` 不纳入本仓库：它是 `fay/` 派生出来的 worktree，`run.sh up|build|test` 发现它
+缺失时会自己 `git -C ../fay worktree add ../origin_fay -b upstream-main upstream/main` 补出来。
 
 ```bash
 git clone --recursive https://github.com/greenhandzdl/DigitalHuman.git
 # 已 clone 过则：git submodule update --init --recursive
+# submodule 的远端换了地址（fay → chuan918/Fay）时：
+git submodule sync -- fay && git submodule update --init --recursive
 ```
 
 ## 快速开始
@@ -73,4 +77,4 @@ LLM 与嵌入走宿主 Ollama（`http://host.docker.internal:11434`），不在�
 
 - `containerd/.env` 是本地实值密钥（DB 口令、JWT 签名密钥），已被 `containerd/.gitignore` 忽略，不入库。
 - 本文档不再明文打印任何口令。
-- ⚠️ 主机遗留项：`~/.gitconfig` 里有一条全局改写 `url."https://<用户>:gho_…@github.com/".insteadOf = "https://github.com/"`，把 `gh auth` 的 OAuth token 以明文写死，并让**所有** GitHub remote 在 `git remote -v` 里显示成带 token 的形式（fay/origin_fay/service/ue 各自 `.git/config` 里存的其实是干净的 URL）。建议删掉这条 insteadOf，改用已装好的 `gh auth git-credential` helper；主机若共享还应**轮换该 token**。此为宿主机全局 git 配置，未代为修改。
+- ⚠️ 主机遗留项：`~/.gitconfig` 里有一条全局改写 `url."https://<用户>:gho_…@github.com/".insteadOf = "https://github.com/"`，把 `gh auth` 的 OAuth token 以明文写死，并让**所有** GitHub remote 在 `git remote -v` 里显示成带 token 的形式（fay/service/ue 各自 `.git/config`、以及 `fay` 里 `upstream` 这个 remote 存的其实都是干净 URL）。建议删掉这条 insteadOf，改用已装好的 `gh auth git-credential` helper；主机若共享还应**轮换该 token**。此为宿主机全局 git 配置，未代为修改。

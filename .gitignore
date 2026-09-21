@@ -1,7 +1,8 @@
 # 根仓库是「伞形」仓库：产品各部分以 submodule 记录精确 commit，
 # 构建上下文与项目文档直接入库。
 
-# origin_fay 仅作为 Fay 上游对照，不纳入本仓库（保持独立 checkout）。
+# origin_fay 不是第 5 个仓库，而是 fay 里 upstream remote(xszyou/Fay) 的 git
+# worktree，由 containerd/run.sh 自动 materialize，故不纳入本仓库。
 origin_fay/
 
 # 运行/构建产物
