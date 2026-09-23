@@ -142,6 +142,7 @@ cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成
                             # 三者各判哪一层，见下面「知识库」一节
 ./run.sh asr-seed           # 本机若已有别的 FunASR 缓存，拷过来省 1.3GB 下载
 ./run.sh logs funasr        # 看某个服务的日志（fay/backend/adapter/frontend/funasr/mysql/redis）
+./run.sh env                # 看清 .env 每一行落到哪个容器、哪些键改了其实不生效
 ```
 
 `dh-funasr` 首次启动会从 ModelScope 下载约 **1.3GB** 的三个模型
