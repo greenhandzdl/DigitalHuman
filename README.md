@@ -138,6 +138,7 @@ cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成
 ./run.sh upstream           # 与 Fay 上游对表：落后几条 + 补丁能否照贴
 ./run.sh kbslice            # 把项目方语料包切成知识库语料（换语料才跑）
 ./run.sh kb                 # 语料入库 + 用真实问法抽测检索
+./run.sh kbq                # 从业务口问一句，判那一问的回帧里知识库有没有真被用上
 ./run.sh asr-seed           # 本机若已有别的 FunASR 缓存，拷过来省 1.3GB 下载
 ./run.sh logs funasr        # 看某个服务的日志（fay/backend/adapter/frontend/funasr/mysql/redis）
 ```

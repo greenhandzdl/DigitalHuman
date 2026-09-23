@@ -20,12 +20,22 @@
 | `service/` 业务后端 | **原生进容器 + 自带测试全绿**，会话/用户/落库/调度器都在链路上 | `backend-test` **39 passed**（每轮重建空测试库）、`backend-probe` **11 PASS / 0 SKIP / 0 FAIL**（路由、迁移、schema、鉴权、活体写路径、调度器） | 没有真实业务数据（种子语料是自造的）；`dev-login` 是 DEBUG 口才给外壳用 |
 | `frontend/` CareEcho H5 | **伙伴方产物 + 本层同源外壳**，聊天与麦克风都从 `:5173` 那一口进 | `frontend-test` **19/19**、`ws-relay-test` **14/14**（含 3 条负面自检）、`asr-test` **13/13** | 外壳只实现了 `/api/chat/send` 与 `/api/health` 两个口，H5 其余 `chatAPI` 方法未接；Xmov 密钥默认留空 → 数字人区域是占位提示 |
 | `ue/` 数字人模型 | **不进容器**，改为构建完整性体检 | `ue-audit` **2 PASS**（描述符可解析 + 每个插件模块 `Source/` 在位）；实测 0 个预编译二进制、5 个插件要 Marketplace 授权、端点级引用 `10002` 为 **0 处** | 对接本身：那个工程从未实现过与 Fay 的 WS 协议，缺的是对端实现而不是本栈端口 |
-| `containerd/` 集成层 | **唯一入口**，14 组测试件、8 常驻服务 + `fay-lite` + `kb-ingest` | `./run.sh test`（完整一轮见 run #32 那节）；`./run.sh audit` 报四个上游仓库 `0/0` 且 `0 dirty` | 完整一轮里 `frontend-probe` 那一条仍在 90s 墙上红（下面「慢在哪」有账） |
+| `containerd/` 集成层 | **唯一入口**，14 组测试件（+ 一组点名的 `kb-fay`）、8 常驻服务 + `fay-lite` + `kb-ingest` | `./run.sh test`（完整一轮见 run #32 那节）；`./run.sh audit` 报四个上游仓库 `0/0` 且 `0 dirty` | 完整一轮里 `frontend-probe` 那一条仍在 90s 墙上红（下面「慢在哪」有账） |
 
 知识库这一格单独拎出来，因为它是这轮新验的：外部语料 14 份 .docx → **516 片段** →
 入库 **576 向量**，12 问真实问法 **recall@3 = 12/12**（`./run.sh kb`，2026-09-22），
 且 `top_k` 扫 3/5/8 三个档位是平的 —— 所以维持 L2 距离、不加阈值、不动切片粒度，
 `patches/yueshen_rag/0003` 那 cosine+阈值 **不打**（没有 MISS 就没证据）。
+上面那些都是**直调工具**验的库侧；业务侧另有一组 `./run.sh kbq`（`probes/kb_fay_probe.py`）
+从 `/api/send` 问一句、判 Fay 那一行的原始回帧，2026-09-23 首跑 **10/10**：注入块在、
+`query=` 逐字等于问句、片段带 `〔出处〕`、正文答完、`<dh-end>` 收尾，摘掉 prestart 注册的
+对照轮里注入块随即消失。同日复跑 **9/10 + 1 SKIP**，跳的是「正文逐字复现知识库那个词」那条
+软证据 —— 这条差别值得记进跨模块文档：**注入是确定发生的，模型引用不引用原话不是**，
+所以那一行只报不判红（判据设计见 containerd/README「业务侧」那一节）。
+它同时钉死一件事：**这一跳查不查库不是模型决定的** ——
+`query_yueshen` 注册成 prestart（`{"query":"{{question}}","top_k":3}`、
+`allow_function_call:false`），拼 prompt 之前无条件跑一次；工具的「禁用」开关掐不断这条路
+（预启动调用带 `skip_enabled_check=True`），能掐断的只有摘注册。
 
 ## 模块之间怎么说话
 
@@ -52,7 +62,7 @@ UE（另一台 Windows）─ WS 拨入 ─▶ dh-fay :10002          音频文�
 | 3 | 后端 → adapter | `POST http://adapter:8010/api/chat`（同步一问一答） | compose 内网名，无鉴权 | 上游失败回 **502**，后端置 `fay_error`，不会静默成"数字人沉默" |
 | 4 | adapter → Fay | 表单 `POST /api/send` 投问题，再**轮询** `POST /api/get-msg` 取回复行 | 同上 | 结束判据是 `<dh-end>` 哨兵（补丁 `fay/0008`），没哨兵才退回 8s 静默 + 必须有正文；假 Fay 下 18 条契约判据今天复跑 18/18 |
 | 5 | Fay → LLM | OpenAI 兼容 `POST {base}/chat/completions`，`base` 由 `FAY_GPT_BASE_URL` / `FAY_BIG_MODEL_BASE_URL` 覆盖（`fay/0009`） | 远端 token 只在 `.env` | 远端 26B：H5 连发四问 **5.6 / 9.4 / 17.8 / 18.2s** 各回一段干净正文（2026-09-22）；本机 9b 只有 6% 权重进显存时同一句话 **172~301s** |
-| 6 | Fay → 知识库 | MCP over **SSE** `http://yueshen-rag:8766/sse`（`yueshen_rag/0001` 加的口；上游只有 stdio，容器里 stdin 那头没人） | 无 | 3 个工具在清单里、prestart 直接调 `query_yueshen`；**这一跳坏了的症状曾经很难看**：工具压根不在清单 → `共 0 步` → 用户只拿到"我来帮你查一下，稍等…" |
+| 6 | Fay → 知识库 | MCP over **SSE** `http://yueshen-rag:8766/sse`（`yueshen_rag/0001` 加的口；上游只有 stdio，容器里 stdin 那头没人） | 无 | 3 个工具在清单里；`query_yueshen` 是 **prestart** 工具，拼 prompt 之前无条件执行，结果以 `<prestart>` 注入当轮 —— **注意这一跳不经 :5010 的管理面**（`runtime_bridge` 进程内直调），所以 yueshen 那侧的日志数不出这一跳的请求，不能用它判断「查没查」。**这一跳坏了的症状曾经很难看**：工具压根不在清单 → `共 0 步` → 用户只拿到"我来帮你查一下，稍等…" |
 | 7 | 知识库 → 嵌入 | OpenAI 兼容 `/embeddings`，`YUESHEN_EMBED_*` 与 Fay 那组**分开**（留空时上游会复用 `gpt_base_url`） | 同上 | 冷换入嵌模型实测 72.9s，所以超时开成 `YUESHEN_EMBED_TIMEOUT`；今天一发 0.6b 嵌入 **2.6s**（已换入） |
 | 8 | H5 麦克风 → 外壳 → FunASR | `ws://<同源>/funasr-ws` 按**常量表** `CARECHO_WS_RELAY=/funasr-ws=funasr:10095/` 转发，客户端给的 path 永不进 `getaddrinfo` | 无 | 协议 `{"text","is_final"}`；`ws-relay-test` 14/14、`asr-test` 13/13、`asr-probe` 9/9 |
 | 9 | Fay ↔ 远程音频 | TCP `:10001`（裸文本 + `{"vad_need":…}` 那套上游方言） | 用户名注册 | 与第 8 跳**是两套方言、未接通**，所以 `远程音频的 ASR 认出了文字` 那条判据恒 SKIP —— 记的是边界不是故障 |
@@ -77,6 +87,12 @@ axios 30s  <  外壳 CARECHO_UPSTREAM_TIMEOUT 90s  <  LLM 420s ≤ Fay 回复空
   一条 `CallToolRequest` 都没有** —— 也就是说 90s 烧在检索之前（Fay 的判断与 LLM 那一发），
   不是嵌入换入：宿主侧嵌模型是 0.6b，事后一发 `/embeddings` 只花 **2.6s**。
   这与 2026-09-22 记的「另一轮 90.1s 撞在外壳那 90s 上」同类。**结论没变**：90s 不该被当成够用的预算。
+  同一天 `./run.sh kbq` 在业务口量到一个能把这条墙解释清楚的现象（那一轮打的是远端 26B，
+  不是上面那一发 frontend-probe，但机制同一条）：模型有时会先回一句
+  「我来帮你查一下，稍等…」然后**改走去调工具**，那一整段沉默实测 76.5s（回帧里是
+  `共 0 步`，即工具没被认出来）才把真正的回答和 `<dh-end>` 补上。也就是说**光是这句开场白
+  加一次失败的规划就能吃掉 90s 的 85%**，还没算嵌入换入 —— 前端那条 30s 与外壳那条 90s
+  都不是余量。
 - 420/480/500/520 那几条是给"模型慢慢想"留的：显存被占满时 9b 一句话要 172~301s，
   600s 的 smoke 才等得起。显存充裕时同一句话是冷启动 39~40s、暖态 4.8s。
 - Fay 那边还有一条 `EMBEDDING_TIMEOUT=90`：仿生记忆检索的换入实测 72.9s，压到 20s 会把
