@@ -2,7 +2,8 @@
 
 一套可复现的**康养数字人栈**：Fay 数字人框架 + FastAPI 业务后端 + 中文语音识别 +
 chromadb 知识库 + CareEcho H5 前端，用一份 `docker compose` 起全栈，
-LLM 与向量嵌入由宿主上的 Ollama 提供。
+LLM 与向量嵌入默认由宿主上的 Ollama 提供（两处都可以独立换成任意 OpenAI 兼容端点 ——
+端点与密钥是 `.env` 里按机器变的事，仓库里只留示例值）。
 
 设计上的两条硬规矩，读代码前先知道：
 
@@ -12,6 +13,7 @@ LLM 与向量嵌入由宿主上的 Ollama 提供。
 2. **能力必须被测试件证明，否则不算存在。** 每个服务配一组探针（`containerd/probes/`），
    判据要么通过、要么明确记成 SKIP/降级并写出原因；每条判据还配一个「故意改坏它必须变红」的负面自检。
 
+> 想看**现在接到哪一步、模块之间每一跳走什么协议、慢在哪**，读 [`INTEGRATION.md`](INTEGRATION.md)。
 > 权威细节、每个坑的分析和实测数字都在 **[`containerd/README.md`](containerd/README.md)**。
 > 本文只讲这套东西由什么组成、怎么起来、以及边界在哪。
 
@@ -95,23 +97,31 @@ flowchart LR
 
 端口策略只有一个开关：`.env` 里的 `DH_ENV`（`prod` 缺省 / `dev`）。
 
-| 服务 | 容器内 | prod（`./run.sh up`） | dev 追加（`./run.sh dev`） |
+| 服务 | 容器内 | prod（`./run.sh up`） | dev（`./run.sh dev`） |
 |---|---|---|---|
-| `dh-frontend` | 8080 | `127.0.0.1:5173` | 绑到探测出的局域网 IP |
-| `dh-backend` | 8000 | `127.0.0.1:8000` | 同上 |
-| `dh-adapter` | 8010 | `127.0.0.1:8010` | 同上 |
-| `dh-fay` | 5000 / 10002 / 10003 | 三个都 `127.0.0.1` | 同上，另加 5010 / 8765 / 10001 / 音频桥 10199 |
+| `dh-frontend` | 8080 | `127.0.0.1:5173` | `0.0.0.0:5173` |
+| `dh-backend` | 8000 | `127.0.0.1:8000` | `0.0.0.0:8000` |
+| `dh-adapter` | 8010 | `127.0.0.1:8010` | `0.0.0.0:8010` |
+| `dh-fay` | 5000 / 10002 / 10003 | 三个都 `127.0.0.1` | 三个都 `0.0.0.0`，另加 5010 / 8765 / 10001 / 音频桥 10199 |
 | `dh-yueshen-rag` | 8766 | **不发布**（只走 compose 内网） | `:8766` |
 | `dh-funasr` | 10095 | **不发布**（只经 5173 同源转发） | `:10095` |
-| `dh-mysql` | 3306 | `127.0.0.1:13306` | **恒 `127.0.0.1`，不跟档位放开** |
-| `dh-redis` | 6379 | `127.0.0.1:16379` | **恒 `127.0.0.1`，不跟档位放开** |
+| `dh-mysql` | 3306 | `127.0.0.1:13306` | `0.0.0.0:13306` |
+| `dh-redis` | 6379 | `127.0.0.1:16379` | `0.0.0.0:16379` |
+
+渲染出来是 prod **8 条端口全是 `127.0.0.1`**、dev **14 条全是 `0.0.0.0`**，一条例外都没有
+（`docker compose ... config | grep host_ip` 复核，命令在 `containerd/README.md` 的档位一节）。
 
 两条边界是刻意的，不是没来得及做：
 
-- `prod` 下把 `BIND_ADDR` 改成 `0.0.0.0` 或某个局域网地址，`./run.sh up` **直接报错退出**。
-  理由是 `:5000` 一离开 loopback 就同时暴露 Fay 的管理台和它的无鉴权 OpenAI 兼容 façade。
-- `mysql` / `redis` 即使在 `dev` 也写死 `127.0.0.1`。它们没有任何外部消费者，
-  而「只靠一个口令的数据库进局域网」正是这类栈最常见的泄漏面。
+- **loopback 这件事只由档位保证，不由某一行写死保证。** `prod` 下把 `BIND_ADDR` 改成
+  `0.0.0.0` 或某个局域网地址，`./run.sh up` 直接报错退出；`dev` 则按设计就是绑 `0.0.0.0` 全开。
+  所以"数据库不出本机"在 prod 下照样成立，而 dev 期间的代价照实写：
+  同网段任何机器都敲得到 `13306`/`16379`，进去的门槛只剩那一发口令 ——
+  跨机联调用完 `./run.sh down`。`:5000` 一离开 loopback 就同时暴露 Fay 的管理台和它的
+  无鉴权 OpenAI 兼容 façade，这条纪律在 dev 下是**已知被吃掉的代价**，不是没想到。
+- 曾经有过的"dev 只放开某一个地址"那一档（`DH_EXTRA_BIND` + 一份 `docker-compose.dev.extra.yml`）
+  已经在 2026-09-22 撤掉：它能表达的事，绑 `0.0.0.0` 之后都能表达，而它多出来的那套
+  "挑地址"的心智负担会让每一次跨机联调都要先判断该填哪个网卡。
 
 ## 快速开始
 
@@ -121,9 +131,9 @@ cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成
 
 ./run.sh up                 # 构建 + 起全栈（首次约 3~6 分钟；dh-funasr 那 1.57 GiB 镜像与模型缓存另算，见下）
 ./run.sh smoke              # 端到端冒烟：后端 → adapter → Fay → Ollama → 回库
-./run.sh test               # 全套测试件（13 组，见 containerd/README.md）
+./run.sh test               # 全套测试件（14 组，见 containerd/README.md）
 ./run.sh test asr-test      # 只跑其中一组
-./run.sh dev                # dev 档位：应用面端口放开，给手机 / 另一台机器连
+./run.sh dev                # dev 档位：端口一律绑 0.0.0.0 全开，给手机 / 另一台机器连（含 13306/16379，用完 down）
 ./run.sh audit              # 核账：四个上游仓库是否仍零改动，并列出 containerd 侧产物
 ./run.sh upstream           # 与 Fay 上游对表：落后几条 + 补丁能否照贴
 ./run.sh kbslice            # 把项目方语料包切成知识库语料（换语料才跑）
@@ -139,12 +149,16 @@ cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成
 ## 档位与跨机流量
 
 `./run.sh dev` 与 `./run.sh up` 起的是**同一套服务**，差别只在多叠一个
-`docker-compose.dev.yml`（放开应用面端口、给后端 `DEBUG=true`、把 `FAY_URL` 指向本机局域网地址）。
+`docker-compose.dev.yml`（追加 Fay 那几个内网口、给后端 `DEBUG=true`、把 `FAY_URL` 指向本机地址），
+外加 `run.sh` 在 dev 分支把 `BIND_ADDR` 导成 `0.0.0.0`。
 `DH_ENV` 不出现在业务代码里，它只决定 compose 文件列表和 `BIND_ADDR` 的落点。
 
 让跑在另一台电脑上的 UE 连进来需要三件事，脚本末尾会把它们直接打出来：
 
-1. 端口进得来 → `dev` 档位绑探测到的局域网 IP（不是 `0.0.0.0`）。
+1. 端口进得来 → `dev` 档位把 `BIND_ADDR` 覆盖成 `0.0.0.0`：本机每个地址都收，
+   于是"对端从哪张网卡来"这件事不需要事先判断。
+   （探测出的局域网 IP 仍然要用，但用在别处：`FAY_URL` 与横幅里那个可点开的地址。
+   要走 tailscale 之类的虚拟网卡就自己在 `.env` 里填 `DH_LAN_IP` —— 它是按机器变的事，不进仓库。）
 2. UE 拿到的音频地址可达 → `containerd/patches/fay/0007-fay-url-env-overridable-CRLF-source.patch`
    让 `fay_url` 能被环境变量 `FAY_URL` 覆盖；不设时完全等于上游原行为。
 3. 一个稳定名字 → 栈内容器要用 `ws://dh-host:10002` 这类写法时，`docker-compose.yml` 的
@@ -182,8 +196,12 @@ cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成
   首次运行 `run.sh` 会由 `tools/gen_keys.py` 从 `.env.example` 生成随机值。
 - 两个公开仓库（`DigitalHuman` 与 `DigitalHuman-containerd`）都不含项目方语料、
   伙伴方数据或任何密钥；`seed/kb_corpus/` 一类的切片产物只在本地。
-- `prod` 的 `BIND_ADDR` 硬闸、`mysql`/`redis` 恒 loopback、FunASR 与 yueshen 不发布宿主端口，
-  是同一件事的三个面：**对外只留必要口，放开必须是显式决定**。
+- `prod` 的 `BIND_ADDR` 硬闸、FunASR 与 yueshen 在 prod 不发布宿主端口，是同一件事的两面：
+  **默认档位只留必要口，放开必须是显式决定（`./run.sh dev`）**。放开之后管理口与应用口一起出去，
+  这件事写在档位说明里而不是藏起来 —— `dev` 不是"更宽松的同一种部署"，是一次有代价的临时暴露。
+- `.env` 里除密钥之外还有一类**按机器变的事**：LLM/嵌入的端点与 token、对端真能取到的本机地址。
+  它们只出现在 `.env`，仓库里那两份 `system.conf` / `.env.example` 一律只给"在这台机器上跑得起来"的
+  示例值 —— 否则换一次部署就得改一次被 git 跟踪的文件，而历史里会留下上一台机器的地址。
 - 外壳的 WebSocket 转发是**常量表**（`CARECHO_WS_RELAY="路径=上游"`，精确匹配、丢 query），
   客户端给的 path 永远不进 `getaddrinfo`，所以它不是开放代理，也就不能被当开放代理用。
 
