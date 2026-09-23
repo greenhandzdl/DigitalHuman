@@ -1,9 +1,10 @@
 # DigitalHuman · 康养数字人（CareEcho）
 
 一套可复现的**康养数字人栈**：Fay 数字人框架 + FastAPI 业务后端 + 中文语音识别 +
-chromadb 知识库 + CareEcho H5 前端，用一份 `docker compose` 起全栈，
-LLM 与向量嵌入默认由宿主上的 Ollama 提供（两处都可以独立换成任意 OpenAI 兼容端点 ——
-端点与密钥是 `.env` 里按机器变的事，仓库里只留示例值）。
+chromadb 知识库 + CareEcho H5 前端，用一份 `docker compose` 起全栈。
+**AI 能力全在栈外**：对话模型由一个 OpenAI 兼容的推理服务提供，向量嵌入由宿主 Ollama 提供，
+两处各自独立可换（默认落点都写成宿主 Ollama 的示例值）—— 端点、模型名与密钥是 `.env` 里
+按机器变的事，仓库里只留示例值。本栈自己不算任何模型权重，也不代发任何一次推理。
 
 设计上的两条硬规矩，读代码前先知道：
 
@@ -14,7 +15,9 @@ LLM 与向量嵌入默认由宿主上的 Ollama 提供（两处都可以独立�
    判据要么通过、要么明确记成 SKIP/降级并写出原因；每条判据还配一个「故意改坏它必须变红」的负面自检。
 
 > 想看**现在接到哪一步、模块之间每一跳走什么协议、慢在哪**，读 [`INTEGRATION.md`](INTEGRATION.md)。
-> 权威细节、每个坑的分析和实测数字都在 **[`containerd/README.md`](containerd/README.md)**。
+> 权威细节与可照敲的命令在 **[`containerd/README.md`](containerd/README.md)**。
+> 要**改**这个仓库，先读规矩（[`AGENTS.md`](AGENTS.md)）和决策与失败复盘
+> （[`containerd/AGENTS.md`](containerd/AGENTS.md)）—— 那里放着"这条曾被实测否证过"之类的事。
 > 本文只讲这套东西由什么组成、怎么起来、以及边界在哪。
 
 ## 仓库构成
@@ -63,7 +66,8 @@ flowchart LR
   end
 
   subgraph HOST["宿主 · 不在本 compose 内"]
-    OLLAMA["Ollama :11434<br/>对话模型 + 嵌入模型"]
+    OLLAMA["宿主 Ollama :11434<br/>嵌入模型（+ 默认对话落点）"]
+    INFER["栈外对话服务 :11432<br/>OpenAI 兼容 · 26B"]
   end
 
   H5 -->|"/api/chat/send（同源 HTTP）"| WEB
@@ -73,8 +77,10 @@ flowchart LR
   BE --> AD
   AD -->|"/api/send + get-msg"| FAY
   WEB -->|"按常量表转发"| ASR
-  FAY -->|"对话与嵌入 HTTP"| OLLAMA
-  RAG -->|"嵌入 HTTP"| OLLAMA
+  FAY -->|"对话 /chat/completions"| INFER
+  FAY -.->|"未设端点时对话也落回它"| OLLAMA
+  FAY -->|"仿生记忆 embedding"| OLLAMA
+  RAG -->|"/v1/embeddings"| OLLAMA
   FAY -->|"MCP stdio / SSE"| RAG
   FAY -->|"音频文件 URL 给 UE 取"| UE
   UE -->|"拨入 :10002 数字人 WS"| FAY
@@ -130,7 +136,7 @@ cd containerd
 cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成随机 DB 口令与 JWT 密钥
 
 ./run.sh up                 # 构建 + 起全栈（首次约 3~6 分钟；dh-funasr 那 1.57 GiB 镜像与模型缓存另算，见下）
-./run.sh smoke              # 端到端冒烟：后端 → adapter → Fay → Ollama → 回库
+./run.sh smoke              # 端到端冒烟：后端 → adapter → Fay → 对话端点 → 回库
 ./run.sh test               # 全套测试件（14 组，见 containerd/README.md）
 ./run.sh test asr-test      # 只跑其中一组
 ./run.sh dev                # dev 档位：端口一律绑 0.0.0.0 全开，给手机 / 另一台机器连（含 13306/16379，用完 down）
@@ -211,9 +217,13 @@ cp .env.example .env        # 或直接 ./run.sh up —— 首次会自动生成
   （伙伴方代码读 `import.meta.env`，运行期换 env 不生效）。默认留空 → 产物走它自己的
   「缺少 Xmov APP_ID」分支，数字人区域显示占位提示、聊天与语音识别照常。
   要填就自己在 `docker build --build-arg` 上给，但注意 ARG 值会留在镜像 history 里。
-- **宿主 Ollama**：LLM 与向量嵌入的默认落点（`http://host.docker.internal:11434`）。
-  本栈有两处**没有**走它，都是明写的例外：
-  - 语音识别 —— Ollama 的 `/api/chat` 只收 `text` + `images`，**没有音频输入口**，
+- **栈外的 AI 服务**：`overlay/fay/system.conf` 里那份示例值把对话与嵌入都指向宿主 Ollama
+  （`http://host.docker.internal:11434`），但那是**缺省**、不是本机现状 —— 本机现在把对话换到
+  另一个 OpenAI 兼容服务上（`…:11432`，26B），嵌入仍在 ollama。两者各由 `.env` 的
+  `FAY_*_BASE_URL` / `YUESHEN_EMBED_BASE_URL` 独立决定，落点表见
+  [`containerd/README.md`](containerd/README.md)「AI 端点落在哪里」。
+  本栈还有两处**谁都不接**，都是明写的例外：
+  - 语音识别 —— ollama 的 `/api/chat` 只收 `text` + `images`，**没有音频输入口**，
     模型清单里也没有 paraformer，所以 `dh-funasr` 自建镜像自己推理。
   - TTS 与形象驱动 —— 那是浏览器里的 Xmov 云 SDK，从架构上就不在这台机器上。
 

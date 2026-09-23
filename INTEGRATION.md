@@ -8,9 +8,9 @@
 
 > 本文所有数字都带日期，最近一次复核是 **2026-09-23 12:14 (CST)**：
 > `./run.sh smoke` 6/6 全绿、`adapter-test` 18/18、`probe-selftest` 10/10、
-> prod 真跑端口逐条 `docker inspect` 过。这组数字是在**远端那台带得动 26B 的机器**跑 LLM、
-> 宿主本机 ollama 跑嵌入这套配置下量的 —— 端点、模型名与 token 都是按机器变的事，
-> 只存在于 `containerd/.env`，仓库里只有示例值。
+> prod 真跑端口逐条 `docker inspect` 过。这组数字是在**栈外那台 26B 对话服务**（本机起的
+> OpenAI 兼容推理服务，端口 `11432`，不进 compose）跑 LLM、宿主 ollama 跑嵌入这套配置下
+> 量的 —— 端点、模型名与 token 都是按机器变的事，只存在于 `containerd/.env`，仓库里只有示例值。
 
 ## 一页结论
 
@@ -48,7 +48,7 @@ H5（浏览器）
  ├─ WS    /funasr-ws ──────────▶ dh-frontend :5173 ──常量表转发─────────▶ dh-funasr :10095
  └─ WS    Xmov SDK ────────────▶ 魔珐云（浏览器里，不经过本栈任何容器）
 
-dh-fay      ─▶ 远端 LLM（OpenAI 兼容 /chat/completions，端点在 .env）
+dh-fay      ─▶ 栈外对话服务 :11432（OpenAI 兼容 /chat/completions，端点与模型名在 .env）
             ─▶ dh-yueshen-rag :8766/sse（MCP over SSE）─▶ 宿主 ollama :11434（嵌入）
             ─▶ dh-redis（Fay 的会话与记忆）
 dh-backend  ─▶ dh-mysql（care_echo_rehab）  ·  dh-adapter ─▶ dh-fay :5000（/api/send + 轮询 /api/get-msg）
@@ -61,7 +61,7 @@ UE（另一台 Windows）─ WS 拨入 ─▶ dh-fay :10002          音频文�
 | 2 | 外壳 → 后端 | `POST /api/v1/chat/sessions/{id}/messages`，外壳替设备先走一次 `POST /auth/dev-login` mint JWT | DEBUG 口；后端再转 adapter | 后端不可达 → 用户看到 `后端 POST /chat/sessions/N/messages 不可达：timed out`（今天这条就是红的样子） |
 | 3 | 后端 → adapter | `POST http://adapter:8010/api/chat`（同步一问一答） | compose 内网名，无鉴权 | 上游失败回 **502**，后端置 `fay_error`，不会静默成"数字人沉默" |
 | 4 | adapter → Fay | 表单 `POST /api/send` 投问题，再**轮询** `POST /api/get-msg` 取回复行 | 同上 | 结束判据是 `<dh-end>` 哨兵（补丁 `fay/0008`），没哨兵才退回 8s 静默 + 必须有正文；假 Fay 下 18 条契约判据今天复跑 18/18 |
-| 5 | Fay → LLM | OpenAI 兼容 `POST {base}/chat/completions`，`base` 由 `FAY_GPT_BASE_URL` / `FAY_BIG_MODEL_BASE_URL` 覆盖（`fay/0009`） | 远端 token 只在 `.env` | 远端 26B：H5 连发四问 **5.6 / 9.4 / 17.8 / 18.2s** 各回一段干净正文（2026-09-22）；本机 9b 只有 6% 权重进显存时同一句话 **172~301s** |
+| 5 | Fay → 对话端点 | OpenAI 兼容 `POST {base}/chat/completions`，`base` 由 `FAY_GPT_BASE_URL` / `FAY_BIG_MODEL_BASE_URL` 覆盖（`fay/0009`） | 那个服务的 token 只在 `.env` | 现在这一跳打的是**栈外那台 26B**（`gemma-4-26b-a4b-nvfp4`，本机起的推理服务）：H5 连发四问 **5.6 / 9.4 / 17.8 / 18.2s** 各回一段干净正文（2026-09-22）；后面那句「同一句话 **172~301s**」量的是对话还落在宿主 ollama、`qwen3.5:9b` 只有 6% 权重进显存那阵子，端点搬走之后不再是这条链的数 |
 | 6 | Fay → 知识库 | MCP over **SSE** `http://yueshen-rag:8766/sse`（`yueshen_rag/0001` 加的口；上游只有 stdio，容器里 stdin 那头没人） | 无 | 3 个工具在清单里；`query_yueshen` 是 **prestart** 工具，拼 prompt 之前无条件执行，结果以 `<prestart>` 注入当轮 —— **注意这一跳不经 :5010 的管理面**（`runtime_bridge` 进程内直调），所以 yueshen 那侧的日志数不出这一跳的请求，不能用它判断「查没查」。**这一跳坏了的症状曾经很难看**：工具压根不在清单 → `共 0 步` → 用户只拿到"我来帮你查一下，稍等…" |
 | 7 | 知识库 → 嵌入 | OpenAI 兼容 `/embeddings`，`YUESHEN_EMBED_*` 与 Fay 那组**分开**（留空时上游会复用 `gpt_base_url`） | 同上 | 冷换入嵌模型实测 72.9s，所以超时开成 `YUESHEN_EMBED_TIMEOUT`；今天一发 0.6b 嵌入 **2.6s**（已换入） |
 | 8 | H5 麦克风 → 外壳 → FunASR | `ws://<同源>/funasr-ws` 按**常量表** `CARECHO_WS_RELAY=/funasr-ws=funasr:10095/` 转发，客户端给的 path 永不进 `getaddrinfo` | 无 | 协议 `{"text","is_final"}`；`ws-relay-test` 14/14、`asr-test` 13/13、`asr-probe` 9/9 |
@@ -87,14 +87,17 @@ axios 30s  <  外壳 CARECHO_UPSTREAM_TIMEOUT 90s  <  LLM 420s ≤ Fay 回复空
   一条 `CallToolRequest` 都没有** —— 也就是说 90s 烧在检索之前（Fay 的判断与 LLM 那一发），
   不是嵌入换入：宿主侧嵌模型是 0.6b，事后一发 `/embeddings` 只花 **2.6s**。
   这与 2026-09-22 记的「另一轮 90.1s 撞在外壳那 90s 上」同类。**结论没变**：90s 不该被当成够用的预算。
-  同一天 `./run.sh kbq` 在业务口量到一个能把这条墙解释清楚的现象（那一轮打的是远端 26B，
+  同一天 `./run.sh kbq` 在业务口量到一个能把这条墙解释清楚的现象（那一轮打的是那台 26B，
   不是上面那一发 frontend-probe，但机制同一条）：模型有时会先回一句
   「我来帮你查一下，稍等…」然后**改走去调工具**，那一整段沉默实测 76.5s（回帧里是
   `共 0 步`，即工具没被认出来）才把真正的回答和 `<dh-end>` 补上。也就是说**光是这句开场白
   加一次失败的规划就能吃掉 90s 的 85%**，还没算嵌入换入 —— 前端那条 30s 与外壳那条 90s
   都不是余量。
-- 420/480/500/520 那几条是给"模型慢慢想"留的：显存被占满时 9b 一句话要 172~301s，
-  600s 的 smoke 才等得起。显存充裕时同一句话是冷启动 39~40s、暖态 4.8s。
+- 420/480/500/520 那几条是给"模型慢慢想"留的，数字定在对话还落在宿主 ollama 的时候：显存被
+  占满时 9b 一句话要 172~301s，600s 的 smoke 才等得起；显存充裕时同一句话冷启动 39~40s、暖态 4.8s。
+  端点搬到那台 26B 之后单发实测 5.6~18.2s，预算却没跟着砍，两个原因：一问在 fork 的规划器链路里
+  可能是**好几发**模型调用（run #2 实测那条链路单轮 180~240s），而这几条真正在保护的是它们的
+  **单调顺序** —— 必须先放弃的是浏览器那 30s 和外壳那 90s，而不是链路中间某一环悄悄放弃。
 - Fay 那边还有一条 `EMBEDDING_TIMEOUT=90`：仿生记忆检索的换入实测 72.9s，压到 20s 会把
   开机线程堵在重试后面，`:8765` 拖到第 61 秒才 bind（这个坑记在 containerd/README 的 0002 那节）。
 
